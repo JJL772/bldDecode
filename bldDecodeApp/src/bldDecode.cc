@@ -39,6 +39,7 @@ static std::vector<int> parse_events(const char* str);
 static std::vector<ChannelType> read_channel_formats(const char* str);
 static void build_channel_list();
 static void bld_printf(const char* fmt, ...) PRINTF_ATTR(1,2);
+static bool is_multicast(in_addr_t inet);
 
 static void timeoutHandler(int) {
     printf("Timeout exceeded, exiting!\n");
@@ -234,11 +235,12 @@ int main(int argc, char *argv[]) {
     }
 
     // If we're multicast, add ourselves to the group
+    in_addr_t mcastInet = inet_addr(mcastAddr);
     if (!unicast) {
         printf("Listening for multicast packets on %s\n", mcastAddr);
         ip_mreq mreq;
         mreq.imr_interface.s_addr = INADDR_ANY;
-        mreq.imr_multiaddr.s_addr = inet_addr(mcastAddr);
+        mreq.imr_multiaddr.s_addr = mcastInet;
 
         if (setsockopt(sockfd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
             perror("failed to opt into multicast: setsockoptfailed");
@@ -257,7 +259,7 @@ int main(int argc, char *argv[]) {
         // Clear buffer so we can easily cast to our structure types without printing junk
         memset(buffer, 0, sizeof(buffer));
 
-        if (numPackets-- <= 0)
+        if (numPackets <= 0)
             break;
 
         char * bufptr = buffer;
@@ -283,10 +285,16 @@ int main(int argc, char *argv[]) {
         if (needsSevr && ptr->severityMask != sevrMask)
             continue;
 
+        // Check if this is unicast and needs to be ignored
+        if (!unicast && !is_multicast(cliaddr.sin_addr.s_addr))
+            continue;
+
+        --numPackets;
+
         // Packet accepted for display, cancel any pending timeouts
         alarm(0);
 
-        bld_printf("====== new packet size %li ======\n", n);
+        bld_printf("====== new packet size %li from %s:%d ======\n", n, inet_ntoa(cliaddr.sin_addr), cliaddr.sin_port);
 
         LOG_VERBOSE("Received size: %li\n", n);
 
@@ -586,4 +594,8 @@ static void bld_printf(const char* fmt, ...) {
     va_end(va);
 
     fputs(msg, stdout);
+}
+
+static bool is_multicast(in_addr_t inet) {
+    return inet >= 0xE0000000 && inet <= 0xEFFFFFFF;
 }
